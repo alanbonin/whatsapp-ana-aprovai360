@@ -9,32 +9,50 @@ import express from 'express'
 const app = express()
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
+const SUPORTE_NUMBER = '5571991606505@s.whatsapp.net'
+
 let currentQR = null
 let isConnected = false
+let faqContent = ''
+let sock = null
 
 const conversationHistory = new Map()
 
-const SYSTEM_PROMPT = `Você é Ana, assistente virtual de suporte do AprovAI360 — plataforma de preparação para concursos públicos.
+async function fetchFAQ() {
+  try {
+    const res = await fetch('https://aprovai360.com.br/api/faq', {
+      headers: { 'User-Agent': 'AnaBot/1.0' },
+      redirect: 'follow',
+    })
+    if (res.ok) {
+      const data = await res.text()
+      faqContent = data.slice(0, 3000)
+      console.log('✅ FAQ atualizado com sucesso')
+    }
+  } catch (err) {
+    console.error('Erro ao buscar FAQ:', err.message)
+  }
+}
 
-Seu papel é ajudar os alunos com:
-- Dúvidas sobre o sistema (como acessar, usar as funcionalidades)
-- Problemas de login ou acesso
-- Informações sobre planos e assinaturas
-- Dúvidas sobre questões e simulados
-- Orientações gerais sobre a plataforma
+function buildSystemPrompt() {
+  return `Você é Ana, assistente virtual de suporte do AprovAI360 — plataforma de preparação para concursos públicos.
 
-Informações sobre o AprovAI360:
+Seu papel é ajudar os alunos com dúvidas sobre o sistema, acesso, planos, questões e simulados.
+
+Informações do sistema:
 - Site: aprovai360.com.br
-- Plataforma de questões e simulados para concursos públicos
-- Possui plano gratuito e plano premium
-- Suporte por email: suporte@aprovai360.com.br
+- Suporte humano: Equipe de Suporte (disponível se você não conseguir resolver)
 
-Regras:
-- Seja sempre simpática, objetiva e profissional
-- Responda em português brasileiro
-- Se não souber responder algo, diga que vai encaminhar para a equipe humana
-- Mantenha respostas curtas e diretas (máximo 3 parágrafos)
-- Não invente informações sobre o sistema`
+${faqContent ? `=== INFORMAÇÕES DO SISTEMA (FAQ) ===\n${faqContent}\n===================================` : ''}
+
+Regras IMPORTANTES:
+- Responda sempre em português brasileiro
+- Seja simpática, objetiva e profissional
+- Respostas curtas e diretas (máximo 3 parágrafos)
+- Não invente informações que não estejam no FAQ acima
+- Se o aluno pedir para falar com humano, ou se você não souber responder, responda EXATAMENTE com: [ENCAMINHAR_SUPORTE]
+- Se a dúvida for muito específica ou técnica e não estiver no FAQ, responda com: [ENCAMINHAR_SUPORTE]`
+}
 
 async function getAnaResponse(phoneNumber, userMessage) {
   if (!conversationHistory.has(phoneNumber)) {
@@ -49,7 +67,7 @@ async function getAnaResponse(phoneNumber, userMessage) {
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 500,
-    system: SYSTEM_PROMPT,
+    system: buildSystemPrompt(),
     messages: history,
   })
 
@@ -57,6 +75,19 @@ async function getAnaResponse(phoneNumber, userMessage) {
   history.push({ role: 'assistant', content: reply })
 
   return reply
+}
+
+async function encaminharParaSuporte(sock, from, clientName) {
+  // Avisa o aluno
+  await sock.sendMessage(from, {
+    text: 'Vou encaminhar para nossa Equipe de Suporte. Em breve alguém entrará em contato com você! 😊',
+  })
+
+  // Notifica o número de suporte
+  const phoneFrom = from.replace('@s.whatsapp.net', '').replace('@lid', '')
+  await sock.sendMessage(SUPORTE_NUMBER, {
+    text: `🔔 *Novo chamado de suporte*\n\n📱 Cliente: +${phoneFrom}\n💬 Precisa de atendimento humano no WhatsApp.`,
+  })
 }
 
 // Página web com QR Code
@@ -97,7 +128,7 @@ async function startWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info')
   const { version } = await fetchLatestBaileysVersion()
 
-  const sock = makeWASocket({
+  sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
@@ -109,7 +140,10 @@ async function startWhatsApp() {
     if (qr) {
       currentQR = qr
       isConnected = false
-      console.log('\n📱 QR Code disponível em: ' + (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 'http://localhost:3000'))
+      const url = process.env.RAILWAY_PUBLIC_DOMAIN
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : 'http://localhost:3000'
+      console.log(`\n📱 QR Code disponível em: ${url}`)
       qrcode.generate(qr, { small: true })
     }
 
@@ -135,6 +169,8 @@ async function startWhatsApp() {
       if (!msg.message) continue
 
       const from = msg.key.remoteJid
+      if (from === SUPORTE_NUMBER) continue
+
       const text =
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
@@ -146,8 +182,14 @@ async function startWhatsApp() {
 
       try {
         const reply = await getAnaResponse(from, text)
-        await sock.sendMessage(from, { text: reply })
-        console.log(`✉️ Ana respondeu: ${reply}`)
+
+        if (reply.includes('[ENCAMINHAR_SUPORTE]')) {
+          await encaminharParaSuporte(sock, from)
+          console.log(`📞 Encaminhado para suporte: ${from}`)
+        } else {
+          await sock.sendMessage(from, { text: reply })
+          console.log(`✉️ Ana respondeu: ${reply}`)
+        }
       } catch (err) {
         console.error('Erro ao responder:', err)
         await sock.sendMessage(from, {
@@ -157,6 +199,10 @@ async function startWhatsApp() {
     }
   })
 }
+
+// Busca FAQ ao iniciar e atualiza a cada hora
+await fetchFAQ()
+setInterval(fetchFAQ, 60 * 60 * 1000)
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => console.log(`🌐 Servidor rodando na porta ${PORT}`))
