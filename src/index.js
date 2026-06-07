@@ -77,17 +77,24 @@ async function getAnaResponse(phoneNumber, userMessage) {
   return reply
 }
 
-async function encaminharParaSuporte(sock, from, clientName) {
+async function encaminharParaSuporte(sock, from) {
   // Avisa o aluno
   await sock.sendMessage(from, {
     text: 'Vou encaminhar para nossa Equipe de Suporte. Em breve alguém entrará em contato com você! 😊',
   })
 
   // Notifica o número de suporte
-  const phoneFrom = from.replace('@s.whatsapp.net', '').replace('@lid', '')
-  await sock.sendMessage(SUPORTE_NUMBER, {
-    text: `🔔 *Novo chamado de suporte*\n\n📱 Cliente: +${phoneFrom}\n💬 Precisa de atendimento humano no WhatsApp.`,
-  })
+  try {
+    const phoneFrom = from.replace('@s.whatsapp.net', '').replace('@lid', '')
+    const [result] = await sock.onWhatsApp('5571991606505')
+    const supportJid = result?.jid || SUPORTE_NUMBER
+    await sock.sendMessage(supportJid, {
+      text: `🔔 *Novo chamado de suporte*\n\n📱 Cliente: +${phoneFrom}\n💬 Precisa de atendimento humano no WhatsApp.`,
+    })
+    console.log(`✅ Suporte notificado com sucesso: ${supportJid}`)
+  } catch (err) {
+    console.error('Erro ao notificar suporte:', err.message)
+  }
 }
 
 // Página web com QR Code
