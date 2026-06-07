@@ -1,0 +1,15 @@
+{
+  "name": "whatsapp-ana-aprovai360",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@whiskeysockets/baileys": "^6.7.9",
+    "express": "^4.19.2",
+    "pino": "^9.3.2",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
